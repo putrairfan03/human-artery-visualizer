@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Human Artery — 3D Multi-Layer Anatomy, Hemodynamics & Stenosis Visualizer</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="./styles.css" />
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://unpkg.com/three@0.170.0/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.170.0/examples/jsm/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <!-- Full-bleed 3D WebGL Canvas Container -->
+  <div id="canvas-container" aria-label="Interactive 3D Human Artery Visualizer"></div>
+
+  <!-- 3D Projected Interactive Layer Pins Overlay -->
+  <div id="pins-layer" aria-label="3D Anatomical Callout Pins"></div>
+
+  <!-- Top-Left Compact Header, Telemetry HUD & Heatmap Legend Stack -->
+  <div class="hud-top-left-stack">
+    <header class="hud-top-left glass-panel">
+      <div class="brand-row">
+        <div class="brand-mark" aria-hidden="true">
+          <span class="pulse-dot"></span>
+        </div>
+        <div class="brand-text">
+          <h1>Human Artery Visualizer</h1>
+          <p class="subtitle">Multi-Layer Anatomy · Hemodynamics · Stenosis</p>
+        </div>
+        <button id="btn-toggle-pins" class="icon-pill active" title="Toggle 3D Layer Pins" aria-pressed="true">
+          <svg viewBox="0 0 20 20" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8">
+            <path d="M10 17s5.5-4.7 5.5-9.2a5.5 5.5 0 1 0-11 0C4.5 12.3 10 17 10 17z"/>
+            <circle cx="10" cy="7.8" r="2"/>
+          </svg>
+          <span>Pins</span>
+        </button>
+      </div>
+
+      <div class="telemetry-bar">
+        <!-- Heart Rate Toggle & Live Pulse Sparkline -->
+        <div class="hr-block">
+          <div class="hr-toggle" role="group" aria-label="Heart Rate Mode">
+            <button id="btn-hr-resting" class="seg-btn active" data-hr="resting">
+              <span class="bpm-label">Resting</span>
+              <span class="bpm-val">65</span>
+            </button>
+            <button id="btn-hr-exercise" class="seg-btn" data-hr="exercise">
+              <span class="bpm-label">Exercise</span>
+              <span class="bpm-val">130</span>
+            </button>
+          </div>
+          <canvas id="pulse-canvas" width="94" height="28" aria-label="Live Arterial Pressure Waveform"></canvas>
+        </div>
+
+        <div class="telemetry-divider"></div>
+
+        <!-- Hemodynamic Metrics -->
+        <div class="metrics-grid">
+          <div class="metric-item">
+            <span class="metric-label">Peak Velocity</span>
+            <span class="metric-value"><strong id="val-velocity">42</strong> <small>cm/s</small></span>
+          </div>
+          <div class="metric-item">
+            <span class="metric-label">Lumen Diam.</span>
+            <span class="metric-value"><strong id="val-lumen">70</strong><small>%</small></span>
+          </div>
+          <div class="metric-item">
+            <span class="metric-label">Wall Shear</span>
+            <span class="metric-value"><strong id="val-shear">6.4</strong> <small>Pa</small></span>
+          </div>
+          <div class="metric-item">
+            <span class="metric-label">Flow Regime</span>
+            <span id="val-regime" class="regime-badge transitional">Transitional</span>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <!-- Heatmap Scale Legend (visible in Velocity & Shear Heatmap mode) -->
+    <aside id="heatmap-legend" class="heatmap-legend glass-panel hidden" aria-label="Velocity and Shear Color Scale">
+      <span class="legend-title">Flow Velocity &amp; Wall Shear Scale</span>
+      <div class="heatmap-gradient"></div>
+      <div class="heatmap-ticks">
+        <span>Low (Laminar)</span>
+        <span>Moderate</span>
+        <span>High-Speed Jet</span>
+      </div>
+    </aside>
+  </div>
+
+  <!-- Right Collapsible Layer Legend & Anatomical Detail Drawer -->
+  <aside id="right-drawer" class="hud-right glass-panel">
+    <button id="btn-collapse-right" class="drawer-tab" title="Collapse or expand Anatomy Legend" aria-expanded="true">
+      <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M6 3l5 5-5 5"/>
+      </svg>
+    </button>
+
+    <div class="drawer-inner">
+      <div class="drawer-header">
+        <span class="section-kicker">Anatomical Layers</span>
+        <span class="hint-text">Click to focus</span>
+      </div>
+
+      <ul id="layer-legend-list" class="layer-list" role="list"></ul>
+
+      <!-- Anatomical Detail Card (Updates when pin or layer is clicked) -->
+      <div id="detail-card" class="detail-card">
+        <div class="detail-header">
+          <div class="detail-title-wrap">
+            <span id="detail-swatch" class="detail-swatch"></span>
+            <div>
+              <span id="detail-tag" class="detail-tag">Layer 3</span>
+              <h2 id="detail-name">Tunica Media</h2>
+            </div>
+          </div>
+          <button id="btn-close-detail" class="close-btn" title="Reset focus">×</button>
+        </div>
+
+        <div class="detail-stats">
+          <div class="stat-pill">
+            <span class="stat-label">Thickness / Share</span>
+            <strong id="detail-thickness">~45% of wall</strong>
+          </div>
+          <div class="stat-pill">
+            <span class="stat-label">Primary Tissue</span>
+            <strong id="detail-tissue-short">Smooth Muscle</strong>
+          </div>
+        </div>
+
+        <div class="detail-section">
+          <h3>Tissue Composition</h3>
+          <p id="detail-composition"></p>
+        </div>
+
+        <div class="detail-section">
+          <h3>Physiological Function</h3>
+          <p id="detail-function"></p>
+        </div>
+
+        <div id="detail-clinical-wrap" class="detail-clinical">
+          <span class="clinical-label">Hemodynamic State</span>
+          <p id="detail-clinical"></p>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Bottom Slim Collapsible Control Bar -->
+  <section id="bottom-bar" class="hud-bottom glass-panel" aria-label="Interactive Controls">
+    <button id="btn-collapse-bottom" class="bottom-collapse-tab" title="Toggle Controls Bar" aria-expanded="true">
+      <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M3 6l5 5 5-5"/>
+      </svg>
+      <span>Controls</span>
+    </button>
+
+    <div class="bottom-content">
+      <!-- Column 1: Layer Peel & Stenosis Sliders -->
+      <div class="control-group sliders-group">
+        <div class="slider-row">
+          <div class="slider-head">
+            <label for="slider-peel">Layer Peel / Cutaway</label>
+            <span id="label-peel" class="mono-readout">72%</span>
+          </div>
+          <input id="slider-peel" type="range" min="0" max="100" value="72" step="1" />
+        </div>
+
+        <div class="slider-row">
+          <div class="slider-head">
+            <label for="slider-stenosis">Stenosis (Narrowing)</label>
+            <div class="preset-pills" role="group" aria-label="Stenosis Presets">
+              <button class="preset-btn" data-stenosis="0">Healthy 0%</button>
+              <button class="preset-btn active" data-stenosis="30">Mild 30%</button>
+              <button class="preset-btn" data-stenosis="50">Moderate 50%</button>
+              <button class="preset-btn" data-stenosis="75">Severe 75%</button>
+            </div>
+            <span id="label-stenosis" class="mono-readout accent-amber">30%</span>
+          </div>
+          <input id="slider-stenosis" type="range" min="0" max="75" value="30" step="1" />
+        </div>
+      </div>
+
+      <div class="bar-divider"></div>
+
+      <!-- Column 2: View Modes -->
+      <div class="control-group modes-group">
+        <span class="group-label">View Mode</span>
+        <div class="mode-pills" role="group" aria-label="Visualisation Mode">
+          <button class="mode-btn active" data-mode="anatomical">Anatomical Tissue</button>
+          <button class="mode-btn" data-mode="xray">X-Ray Translucent</button>
+          <button class="mode-btn" data-mode="heatmap">Velocity &amp; Shear</button>
+        </div>
+      </div>
+
+      <div class="bar-divider"></div>
+
+      <!-- Column 3: Quick Camera Buttons -->
+      <div class="control-group cameras-group">
+        <span class="group-label">Camera Views</span>
+        <div class="camera-pills" role="group" aria-label="Quick Camera Presets">
+          <button class="cam-btn active" data-cam="hero">Hero 3/4 Cutaway</button>
+          <button class="cam-btn" data-cam="crossSection">Cross-Section End</button>
+          <button class="cam-btn" data-cam="stenosis">Stenosis Close-Up</button>
+          <button class="cam-btn" data-cam="peelOverview">Layer Peel Overview</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Loading Overlay -->
+  <div id="loading-overlay" class="loading-overlay">
+    <div class="loader-card glass-panel">
+      <div class="spinner"></div>
+      <span>Synthesizing Procedural Arterial Anatomy…</span>
+    </div>
+  </div>
+
+  <script type="module" src="./src/main.js"></script>
+</body>
+</html>
