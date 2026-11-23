@@ -157,8 +157,8 @@ function createStreamlineOverlay() {
 
   const tmpColor = new THREE.Color();
 
-  function update(time, stenosisPct, viewMode) {
-    const s = clamp01(stenosisPct / 100);
+  function update(time, effectiveStenosisPct, viewMode, thrombusOcclusion = 0) {
+    const s = clamp01(effectiveStenosisPct / 100);
     const { xMin, xMax, plaqueCenterX } = ARTERY_DIMENSIONS;
 
     const targetOpacity =
@@ -166,7 +166,8 @@ function createStreamlineOverlay() {
     group.visible = targetOpacity > 0.01;
     if (!group.visible) return;
 
-    const turbFactor = smoothstep(0.18, 0.72, s);
+    const turbFactor = smoothstep(0.18, 0.72, s) * (1.0 - thrombusOcclusion * 0.85);
+    const occluded = thrombusOcclusion >= 0.82;
 
     for (const item of lines) {
       item.mat.opacity = targetOpacity;
@@ -209,10 +210,22 @@ function createStreamlineOverlay() {
         pos[j * 3 + 1] = y;
         pos[j * 3 + 2] = z;
 
-        // Color streamline by local flow speed + flowing pulse shimmer
+        // Color streamline by local flow speed + flowing pulse shimmer (dimmed downstream if occluded)
         const areaRatio = Math.max(0.1, (1 - cross.narrowing) * (1 - cross.narrowing));
-        const localSpeedNorm = clamp01(((1.0 / areaRatio) - 0.85) / 4.2);
-        const shimmer = 0.72 + 0.28 * Math.sin(f * 26.0 - time * (6.5 + localSpeedNorm * 6.0) + item.phaseOffset);
+        const localSpeedNorm = occluded
+          ? 0.02
+          : clamp01(((1.0 / areaRatio) - 0.85) / 4.2) * (1.0 - thrombusOcclusion * 0.65);
+        const downstreamMask =
+          thrombusOcclusion > 0.2 && x > plaqueCenterX - 0.2
+            ? Math.max(0.04, 1.0 - thrombusOcclusion)
+            : 1.0;
+        const shimmer =
+          (0.72 +
+            0.28 *
+              Math.sin(
+                f * 26.0 - time * (occluded ? 0.8 : 6.5 + localSpeedNorm * 6.0) + item.phaseOffset
+              )) *
+          downstreamMask;
 
         if (viewMode === 'heatmap') {
           setVelocityHeatmapColor(tmpColor, localSpeedNorm * 0.92 + 0.08);
@@ -350,20 +363,38 @@ export function createBloodFlowSystem() {
 
   let simTime = 0;
 
-  function updatePool(pool, mesh, type, dt, stenosis, pulseVal, heartRateMode, viewMode) {
+  function updatePool(
+    pool,
+    mesh,
+    type,
+    dt,
+    effectiveStenosis,
+    pulseVal,
+    heartRateMode,
+    viewMode,
+    balloonOcclusion,
+    thrombusOcclusion
+  ) {
     const { xMin, xMax, plaqueCenterX } = ARTERY_DIMENSIONS;
     const isExercise = heartRateMode === 'exercise';
     const hrSpeedScale = isExercise ? 1.72 : 1.0;
     const pulsatileDrive = 0.66 + 0.62 * pulseVal;
     const baseAxialSpeed = 2.05 * hrSpeedScale * pulsatileDrive;
 
-    const turbGlobal = smoothstep(0.18, 0.72, stenosis);
+    // Temporary balloon hold or progressive thrombotic occlusion slows transmission
+    const occlusionLevel = Math.max(thrombusOcclusion, balloonOcclusion * 0.92);
+    const transmission = Math.max(0.0, 1.0 - Math.pow(occlusionLevel, 1.55));
+    const isThrombusBlocked = thrombusOcclusion >= 0.45;
+    const clotFrontX = plaqueCenterX - 0.92;
+    const clotBackX = plaqueCenterX + 0.92;
+
+    const turbGlobal = smoothstep(0.18, 0.72, effectiveStenosis) * (1.0 - occlusionLevel * 0.85);
     const isHeatmap = viewMode === 'heatmap';
     const isXray = viewMode === 'xray';
 
     for (let i = 0; i < pool.length; i++) {
       const p = pool[i];
-      const cross = getLumenCrossSection(p.x, stenosis);
+      const cross = getLumenCrossSection(p.x, effectiveStenosis);
 
       // 1. Parabolic Poiseuille laminar velocity profile (fastest along centerline)
       const parabolic = 1.0 - 0.58 * p.rNorm * p.rNorm;
@@ -381,37 +412,68 @@ export function createBloodFlowSystem() {
       if (inPostZone) {
         postEnv = Math.sin((postX / 4.9) * Math.PI) * Math.exp(-postX * 0.24) * turbGlobal;
 
-        // Outer recirculation eddy belt behind the plaque shoulder vs penetrating high-speed central jet
         if (p.rNorm > 0.44) {
           const outerFactor = (p.rNorm - 0.44) / 0.56;
-          // Swirling azimuthal vortex rotation
           const swirlSpeed = (2.8 + 4.8 * outerFactor) * postEnv * hrSpeedScale * p.eddyDir;
           p.phi += swirlSpeed * dt;
 
-          // Radial mixing oscillations inside vortex shear layer
           const radialOsc =
             Math.sin(simTime * 5.2 + p.eddyPhase + postX * 1.9) * 0.22 * postEnv;
           p.rNorm = Math.max(0.24, Math.min(0.92, p.baseRNorm + radialOsc));
 
-          // Near-wall eddy slowdown & slight swirling recirculation pocket right behind plaque
           const eddyPocket = Math.sin(postX * 1.85 + p.eddyPhase - simTime * 2.6);
-          eddyAxialMod = Math.max(-0.28 * postEnv, 1.0 - postEnv * (0.72 + 0.45 * outerFactor) + 0.28 * eddyPocket * postEnv);
+          eddyAxialMod = Math.max(
+            -0.28 * postEnv,
+            1.0 - postEnv * (0.72 + 0.45 * outerFactor) + 0.28 * eddyPocket * postEnv
+          );
         } else {
-          // Central stenotic jet persists slightly downstream before diffusing
           eddyAxialMod = 1.0 + postEnv * 0.95;
           p.phi += 0.85 * postEnv * p.eddyDir * dt;
           p.rNorm += (p.baseRNorm - p.rNorm) * Math.min(1, dt * 3.0);
         }
       } else {
-        // Gentle laminar relaxation back to streamline radius
         p.rNorm += (p.baseRNorm - p.rNorm) * Math.min(1, dt * 2.5);
       }
 
+      // Compute axial velocity including Thrombosis Stagnation & Balloon Hold physics
+      let localVx = baseAxialSpeed * parabolic * jetMultiplier * eddyAxialMod * transmission;
+
+      if (isThrombusBlocked) {
+        const blockStrength = smoothstep(0.45, 0.92, thrombusOcclusion);
+        if (p.x < clotFrontX) {
+          // Upstream proximal blood cells approach clot, pile up densely, and pulse/stagnate in place!
+          const distToClot = clotFrontX - p.x;
+          const pileZone = smoothstep(0.0, 3.8, distToClot);
+          // Cells farther back slowly creep forward to pack behind the clot; cells right at clot face oscillate with heartbeat
+          const creepSpeed = (0.38 * pileZone + 0.05) * (1.0 - 0.65 * blockStrength);
+          const stasisOsc = (pulseVal - 0.36) * 0.42 * blockStrength * (1.0 - pileZone * 0.5);
+          localVx = localVx * (1 - blockStrength) + (creepSpeed + stasisOsc) * blockStrength;
+
+          // Subtle sluggish Brownian/swirl agitation in backed-up stagnant blood column
+          p.phi += Math.sin(simTime * 1.6 + p.eddyPhase) * 0.22 * blockStrength * dt;
+        } else if (p.x >= clotFrontX && p.x <= clotBackX) {
+          // Inside occluded thrombus region: stop & gently get nudged upstream or halted
+          if (blockStrength > 0.72) {
+            localVx = -0.35 * blockStrength; // Push back to proximal clot face so cells visually stack upstream
+          } else {
+            localVx *= 0.2;
+          }
+        } else {
+          // Downstream of total occlusion: blood flow completely halts!
+          localVx = localVx * (1.0 - blockStrength);
+        }
+      }
+
       // Advance axial position
-      const localVx = baseAxialSpeed * parabolic * jetMultiplier * eddyAxialMod;
       p.x += localVx * dt;
 
-      // Wrap seamlessly from outflow back to inflow
+      // Prevent upstream backed-up cells from penetrating the 100% occluded thrombus barrier
+      if (thrombusOcclusion > 0.75 && p.x > clotFrontX - 0.05 && p.x < plaqueCenterX + 0.1) {
+        // Pack cells across the proximal stagnation buffer [clotFrontX - 2.6, clotFrontX - 0.08]
+        p.x = clotFrontX - 0.08 - (p.eddyPhase / (Math.PI * 2)) * 0.35;
+      }
+
+      // Wrap seamlessly from outflow back to inflow (only when flow is moving)
       if (p.x > xMax + 0.12) {
         p.x = xMin - 0.1 + ((p.x - xMax) % 0.4);
         p.rNorm = p.baseRNorm;
@@ -421,21 +483,21 @@ export function createBloodFlowSystem() {
       }
 
       // Compute exact lumen-safe 3D position (guaranteed zero wall clipping)
-      const curCross = getLumenCrossSection(p.x, stenosis);
+      const curCross = getLumenCrossSection(p.x, effectiveStenosis);
       const maxSafeR = Math.max(0.03, curCross.radius - p.cellRadius * 0.92);
       const rWorld = p.rNorm * maxSafeR;
 
       const y = curCross.centerY + rWorld * Math.sin(p.phi);
       const z = curCross.centerZ + rWorld * Math.cos(p.phi);
 
-      // Cell orientation: laminar streamline alignment upstream -> chaotic tumbling in post-stenotic eddies
-      const tumbleAmp = 0.35 + postEnv * 5.8 + cross.narrowing * 1.6;
+      // Cell orientation: laminar streamline alignment -> chaotic tumbling -> slow stasis drift
+      const motionScale = thrombusOcclusion > 0.75 ? 0.25 : 1.0;
+      const tumbleAmp = (0.35 + postEnv * 5.8 + curCross.narrowing * 1.6) * motionScale;
       if (type === 'rbc') {
-        // In laminar flow, RBCs align mostly edge-on along X-axis with gentle tank-tread wobble
         if (postEnv < 0.08) {
           const targetRotZ = Math.PI * 0.5 + Math.sin(simTime * 2.0 + p.eddyPhase) * 0.22;
           p.rotZ += (targetRotZ - p.rotZ) * Math.min(1, dt * 4.5);
-          p.rotX += p.spinRate * 0.35 * dt;
+          p.rotX += p.spinRate * 0.35 * motionScale * dt;
           p.rotY = p.phi * 0.25 + Math.cos(simTime * 1.6 + p.eddyPhase) * 0.25;
         } else {
           p.rotX += (p.spinRate + 2.4 * p.eddyDir) * tumbleAmp * dt;
@@ -455,9 +517,11 @@ export function createBloodFlowSystem() {
 
       // Per-instance color update
       if (isHeatmap) {
-        // Normalize local speed + shear into [0, 1] for cool-blue -> red heatmap
-        const speedScore = clamp01((Math.abs(localVx) - 0.7) / (isExercise ? 8.2 : 5.4));
-        const shearBoost = curCross.narrowing * 0.42 + (p.rNorm > 0.72 ? curCross.narrowing * 0.25 : 0);
+        const speedScore = clamp01((Math.abs(localVx) - 0.5) / (isExercise ? 8.2 : 5.4));
+        const shearBoost =
+          thrombusOcclusion > 0.75
+            ? 0.0
+            : curCross.narrowing * 0.42 + (p.rNorm > 0.72 ? curCross.narrowing * 0.25 : 0);
         setVelocityHeatmapColor(tmpColor, clamp01(speedScore * 0.82 + shearBoost));
         mesh.setColorAt(i, tmpColor);
       } else if (isXray) {
@@ -471,7 +535,14 @@ export function createBloodFlowSystem() {
           mesh.setColorAt(i, xrayPltColor);
         }
       } else {
-        mesh.setColorAt(i, p.baseColor);
+        // Darken stagnant upstream/downstream cells slightly during acute occlusion (deoxygenated stasis!)
+        if (thrombusOcclusion > 0.5 && type === 'rbc') {
+          const stasisTint = 1.0 - 0.34 * smoothstep(0.5, 1.0, thrombusOcclusion);
+          tmpColor.copy(p.baseColor).multiplyScalar(stasisTint);
+          mesh.setColorAt(i, tmpColor);
+        } else {
+          mesh.setColorAt(i, p.baseColor);
+        }
       }
     }
 
@@ -481,15 +552,55 @@ export function createBloodFlowSystem() {
     }
   }
 
-  function update(dt, stenosisPct, pulseVal, heartRateMode, viewMode) {
+  function update(
+    dt,
+    effectiveStenosisPct,
+    pulseVal,
+    heartRateMode,
+    viewMode,
+    { balloonOcclusion = 0, thrombusOcclusion = 0 } = {}
+  ) {
     simTime += dt;
-    const stenosis = clamp01(stenosisPct / 100);
+    const stenosis = clamp01(effectiveStenosisPct / 100);
 
-    updatePool(rbcPool, rbcMesh, 'rbc', dt, stenosis, pulseVal, heartRateMode, viewMode);
-    updatePool(wbcPool, wbcMesh, 'wbc', dt, stenosis, pulseVal, heartRateMode, viewMode);
-    updatePool(plateletPool, plateletMesh, 'platelet', dt, stenosis, pulseVal, heartRateMode, viewMode);
+    updatePool(
+      rbcPool,
+      rbcMesh,
+      'rbc',
+      dt,
+      stenosis,
+      pulseVal,
+      heartRateMode,
+      viewMode,
+      balloonOcclusion,
+      thrombusOcclusion
+    );
+    updatePool(
+      wbcPool,
+      wbcMesh,
+      'wbc',
+      dt,
+      stenosis,
+      pulseVal,
+      heartRateMode,
+      viewMode,
+      balloonOcclusion,
+      thrombusOcclusion
+    );
+    updatePool(
+      plateletPool,
+      plateletMesh,
+      'platelet',
+      dt,
+      stenosis,
+      pulseVal,
+      heartRateMode,
+      viewMode,
+      balloonOcclusion,
+      thrombusOcclusion
+    );
 
-    streamlines.update(simTime, stenosisPct, viewMode);
+    streamlines.update(simTime, effectiveStenosisPct, viewMode, thrombusOcclusion);
   }
 
   return {

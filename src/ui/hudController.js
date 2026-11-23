@@ -2,19 +2,26 @@ import * as THREE from 'three';
 import {
   ALL_ANATOMY_ITEMS,
   ANATOMY_BY_ID,
+  GUIDED_TOUR_STEPS,
+  QUIZ_QUESTIONS,
   computeHemodynamics,
   getAnatomyPinAnchor,
   sampleArterialPulse
 } from '../config/anatomyData.js';
+import { createHemodynamicsGraph } from './hemodynamicsGraph.js';
 
 /**
- * Glassmorphic HUD Controller, Interactive 3D Projected Layer Pins,
- * Live Arterial Pressure Waveform Sparkline, Telemetry Readouts & Detail Drawer.
+ * Glassmorphic HUD Controller:
+ * - Interactive 3D Projected Layer Pins
+ * - Live Arterial Pressure Waveform Sparkline & Telemetry Readouts
+ * - 3-Tab Right Inspector (Anatomy | Poiseuille & Bernoulli Physics | Guided Tour & Quiz)
+ * - Clinical Intervention Controls (PCI Stent & Plaque Rupture / Thrombosis)
  */
 export function createHudController(callbacks) {
   const els = {
     pinsLayer: document.getElementById('pins-layer'),
     btnTogglePins: document.getElementById('btn-toggle-pins'),
+    btnToggleTour: document.getElementById('btn-toggle-tour'),
     pulseDot: document.querySelector('.pulse-dot'),
     pulseCanvas: document.getElementById('pulse-canvas'),
     hrButtons: Array.from(document.querySelectorAll('[data-hr]')),
@@ -24,11 +31,19 @@ export function createHudController(callbacks) {
     valShear: document.getElementById('val-shear'),
     valRegime: document.getElementById('val-regime'),
     heatmapLegend: document.getElementById('heatmap-legend'),
+    statusPill: document.getElementById('clinical-status-pill'),
+    statusText: document.getElementById('clinical-status-text'),
 
     rightDrawer: document.getElementById('right-drawer'),
     btnCollapseRight: document.getElementById('btn-collapse-right'),
-    layerLegendList: document.getElementById('layer-legend-list'),
+    drawerTabButtons: Array.from(document.querySelectorAll('.drawer-tab-btn[data-tab]')),
+    tabPanels: {
+      anatomy: document.getElementById('tab-anatomy'),
+      physics: document.getElementById('tab-physics'),
+      education: document.getElementById('tab-education')
+    },
 
+    layerLegendList: document.getElementById('layer-legend-list'),
     detailSwatch: document.getElementById('detail-swatch'),
     detailTag: document.getElementById('detail-tag'),
     detailName: document.getElementById('detail-name'),
@@ -37,9 +52,45 @@ export function createHudController(callbacks) {
     detailTissueShort: document.getElementById('detail-tissue-short'),
     detailComposition: document.getElementById('detail-composition'),
     detailFunction: document.getElementById('detail-function'),
-    detailClinicalWrap: document.getElementById('detail-clinical-wrap'),
     detailClinical: document.getElementById('detail-clinical'),
 
+    // Physics Tab
+    hemoGraphCanvas: document.getElementById('hemo-graph-canvas'),
+    physPeakVel: document.getElementById('phys-peak-vel'),
+    physDeltaP: document.getElementById('phys-delta-p'),
+    physResistance: document.getElementById('phys-resistance'),
+    physReynolds: document.getElementById('phys-reynolds'),
+    physNote: document.getElementById('phys-note'),
+
+    // Education Tab: Guided Tour & Quick Quiz
+    subtabButtons: Array.from(document.querySelectorAll('.subtab-btn[data-subtab]')),
+    subtabTour: document.getElementById('subtab-tour'),
+    subtabQuiz: document.getElementById('subtab-quiz'),
+    tourStepCounter: document.getElementById('tour-step-counter'),
+    tourDots: document.getElementById('tour-dots'),
+    tourStepBadge: document.getElementById('tour-step-badge'),
+    tourStepTitle: document.getElementById('tour-step-title'),
+    tourStepSummary: document.getElementById('tour-step-summary'),
+    tourStepActions: document.getElementById('tour-step-actions'),
+    btnTourStent: document.getElementById('btn-tour-stent'),
+    btnTourRupture: document.getElementById('btn-tour-rupture'),
+    btnTourPrev: document.getElementById('btn-tour-prev'),
+    btnTourNext: document.getElementById('btn-tour-next'),
+
+    quizProgress: document.getElementById('quiz-progress'),
+    quizScore: document.getElementById('quiz-score'),
+    quizBody: document.getElementById('quiz-body'),
+    quizQuestion: document.getElementById('quiz-question'),
+    quizOptions: document.getElementById('quiz-options'),
+    quizFeedback: document.getElementById('quiz-feedback'),
+    quizFooter: document.getElementById('quiz-footer'),
+    btnQuizNext: document.getElementById('btn-quiz-next'),
+    quizSummary: document.getElementById('quiz-summary'),
+    quizFinalScore: document.getElementById('quiz-final-score'),
+    quizFinalMsg: document.getElementById('quiz-final-msg'),
+    btnQuizRetake: document.getElementById('btn-quiz-retake'),
+
+    // Bottom Dock
     bottomBar: document.getElementById('bottom-bar'),
     btnCollapseBottom: document.getElementById('btn-collapse-bottom'),
     sliderPeel: document.getElementById('slider-peel'),
@@ -49,8 +100,14 @@ export function createHudController(callbacks) {
     presetButtons: Array.from(document.querySelectorAll('.preset-btn[data-stenosis]')),
     modeButtons: Array.from(document.querySelectorAll('.mode-btn[data-mode]')),
     camButtons: Array.from(document.querySelectorAll('.cam-btn[data-cam]')),
+    btnDeployStent: document.getElementById('btn-deploy-stent'),
+    btnTriggerRupture: document.getElementById('btn-trigger-rupture'),
+
     loadingOverlay: document.getElementById('loading-overlay')
   };
+
+  // Initialize Live Poiseuille & Bernoulli 2D Canvas Graph
+  const hemoGraph = createHemodynamicsGraph(els.hemoGraphCanvas);
 
   // Build Right Drawer Layer Legend items
   const legendButtons = new Map();
@@ -96,7 +153,212 @@ export function createHudController(callbacks) {
     pinElements.set(item.id, pin);
   }
 
-  // Wire Bottom Bar Sliders & Buttons
+  // =========================================================================
+  // Right Panel Tabs (Anatomy | Physics | Tour & Quiz)
+  // =========================================================================
+  let activeTab = 'anatomy';
+
+  function setRightTab(tabKey, expandIfCollapsed = true) {
+    activeTab = tabKey;
+    for (const btn of els.drawerTabButtons) {
+      const match = btn.dataset.tab === tabKey;
+      btn.classList.toggle('active', match);
+      btn.setAttribute('aria-selected', String(match));
+    }
+    for (const [key, panel] of Object.entries(els.tabPanels)) {
+      if (panel) panel.classList.toggle('active', key === tabKey);
+    }
+    if (els.btnToggleTour) {
+      const isEdu = tabKey === 'education';
+      els.btnToggleTour.classList.toggle('active', isEdu);
+      els.btnToggleTour.setAttribute('aria-pressed', String(isEdu));
+    }
+    if (expandIfCollapsed && els.rightDrawer.classList.contains('collapsed')) {
+      els.rightDrawer.classList.remove('collapsed');
+      els.btnCollapseRight.setAttribute('aria-expanded', 'true');
+    }
+  }
+
+  for (const btn of els.drawerTabButtons) {
+    btn.addEventListener('click', () => {
+      setRightTab(btn.dataset.tab);
+      if (btn.dataset.tab === 'education' && activeEduSubtab === 'tour') {
+        callbacks.onApplyTourStep(GUIDED_TOUR_STEPS[tourStepIndex]);
+      }
+    });
+  }
+
+  // Top-Left "Tour & Quiz" Toggle Pill
+  if (els.btnToggleTour) {
+    els.btnToggleTour.addEventListener('click', () => {
+      if (activeTab === 'education' && !els.rightDrawer.classList.contains('collapsed')) {
+        setRightTab('anatomy', false);
+      } else {
+        setRightTab('education', true);
+        if (activeEduSubtab === 'tour') {
+          callbacks.onApplyTourStep(GUIDED_TOUR_STEPS[tourStepIndex]);
+        }
+      }
+    });
+  }
+
+  // =========================================================================
+  // Guided Anatomical Tour (7 Steps)
+  // =========================================================================
+  let activeEduSubtab = 'tour';
+  let tourStepIndex = 0;
+
+  function setEduSubtab(subKey) {
+    activeEduSubtab = subKey;
+    for (const btn of els.subtabButtons) {
+      btn.classList.toggle('active', btn.dataset.subtab === subKey);
+    }
+    els.subtabTour.classList.toggle('active', subKey === 'tour');
+    els.subtabQuiz.classList.toggle('active', subKey === 'quiz');
+  }
+
+  for (const btn of els.subtabButtons) {
+    btn.addEventListener('click', () => setEduSubtab(btn.dataset.subtab));
+  }
+
+  // Build Tour progress dots
+  els.tourDots.innerHTML = '';
+  const tourDotEls = GUIDED_TOUR_STEPS.map((step, idx) => {
+    const dot = document.createElement('span');
+    dot.className = 'tour-dot' + (idx === 0 ? ' active' : '');
+    dot.title = `Step ${step.step}: ${step.title}`;
+    dot.addEventListener('click', () => goToTourStep(idx));
+    els.tourDots.appendChild(dot);
+    return dot;
+  });
+
+  function renderTourCard(idx) {
+    const step = GUIDED_TOUR_STEPS[idx];
+    els.tourStepCounter.textContent = `Step ${step.step} of ${GUIDED_TOUR_STEPS.length}`;
+    els.tourStepBadge.textContent = step.badge;
+    els.tourStepTitle.textContent = step.title;
+    els.tourStepSummary.textContent = step.summary;
+    els.tourStepActions.classList.toggle('hidden', !step.showActionShortcuts);
+    els.btnTourPrev.disabled = idx === 0;
+    els.btnTourNext.textContent =
+      idx === GUIDED_TOUR_STEPS.length - 1 ? 'Start Quiz →' : 'Next →';
+    tourDotEls.forEach((d, i) => d.classList.toggle('active', i === idx));
+  }
+
+  function goToTourStep(idx) {
+    tourStepIndex = Math.max(0, Math.min(GUIDED_TOUR_STEPS.length - 1, idx));
+    renderTourCard(tourStepIndex);
+    callbacks.onApplyTourStep(GUIDED_TOUR_STEPS[tourStepIndex]);
+  }
+
+  els.btnTourPrev.addEventListener('click', () => {
+    if (tourStepIndex > 0) goToTourStep(tourStepIndex - 1);
+  });
+
+  els.btnTourNext.addEventListener('click', () => {
+    if (tourStepIndex < GUIDED_TOUR_STEPS.length - 1) {
+      goToTourStep(tourStepIndex + 1);
+    } else {
+      setEduSubtab('quiz');
+    }
+  });
+
+  els.btnTourStent.addEventListener('click', () => callbacks.onToggleStent());
+  els.btnTourRupture.addEventListener('click', () => callbacks.onToggleRupture());
+  renderTourCard(0);
+
+  // =========================================================================
+  // Interactive 5-Question Self-Check Quiz
+  // =========================================================================
+  let quizIndex = 0;
+  let quizScore = 0;
+  let quizAnswered = false;
+
+  function renderQuizQuestion() {
+    const q = QUIZ_QUESTIONS[quizIndex];
+    quizAnswered = false;
+    els.quizBody.classList.remove('hidden');
+    els.quizFooter.classList.remove('hidden');
+    els.quizSummary.classList.add('hidden');
+    els.quizFeedback.classList.add('hidden');
+    els.btnQuizNext.disabled = true;
+    els.btnQuizNext.textContent =
+      quizIndex === QUIZ_QUESTIONS.length - 1 ? 'Finish Quiz →' : 'Next Question →';
+
+    els.quizProgress.textContent = `Question ${quizIndex + 1} of ${QUIZ_QUESTIONS.length}`;
+    els.quizScore.textContent = `Score: ${quizScore} / ${QUIZ_QUESTIONS.length}`;
+    els.quizQuestion.textContent = q.question;
+
+    els.quizOptions.innerHTML = '';
+    const letters = ['A', 'B', 'C', 'D'];
+    q.options.forEach((optText, optIdx) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'quiz-opt-btn';
+      btn.textContent = `${letters[optIdx]}. ${optText}`;
+      btn.addEventListener('click', () => handleQuizAnswer(optIdx));
+      els.quizOptions.appendChild(btn);
+    });
+  }
+
+  function handleQuizAnswer(selectedIdx) {
+    if (quizAnswered) return;
+    quizAnswered = true;
+    const q = QUIZ_QUESTIONS[quizIndex];
+    const isCorrect = selectedIdx === q.correctIndex;
+    if (isCorrect) quizScore++;
+
+    els.quizScore.textContent = `Score: ${quizScore} / ${QUIZ_QUESTIONS.length}`;
+
+    const optButtons = Array.from(els.quizOptions.querySelectorAll('.quiz-opt-btn'));
+    optButtons.forEach((btn, idx) => {
+      btn.disabled = true;
+      if (idx === q.correctIndex) btn.classList.add('correct');
+      else if (idx === selectedIdx && !isCorrect) btn.classList.add('wrong');
+    });
+
+    els.quizFeedback.className = `quiz-feedback ${isCorrect ? 'correct' : 'wrong'}`;
+    els.quizFeedback.textContent = `${isCorrect ? 'Correct! ' : 'Not quite — '}${q.explanation}`;
+    els.btnQuizNext.disabled = false;
+  }
+
+  function showQuizSummary() {
+    els.quizBody.classList.add('hidden');
+    els.quizFooter.classList.add('hidden');
+    els.quizSummary.classList.remove('hidden');
+    els.quizFinalScore.textContent = `${quizScore} / ${QUIZ_QUESTIONS.length}`;
+
+    if (quizScore === QUIZ_QUESTIONS.length) {
+      els.quizFinalMsg.textContent =
+        'Outstanding mastery of vascular histology, Poiseuille/Bernoulli hemodynamics, thrombosis, and PCI stenting!';
+    } else if (quizScore >= 3) {
+      els.quizFinalMsg.textContent =
+        'Solid understanding of arterial anatomy and flow mechanics. Review the Physics tab or Guided Tour to perfect the remaining concepts.';
+    } else {
+      els.quizFinalMsg.textContent =
+        'Walk through the 7-step Guided Tour and live Poiseuille/Bernoulli graph, then try the quiz again!';
+    }
+  }
+
+  els.btnQuizNext.addEventListener('click', () => {
+    if (quizIndex < QUIZ_QUESTIONS.length - 1) {
+      quizIndex++;
+      renderQuizQuestion();
+    } else {
+      showQuizSummary();
+    }
+  });
+
+  els.btnQuizRetake.addEventListener('click', () => {
+    quizIndex = 0;
+    quizScore = 0;
+    renderQuizQuestion();
+  });
+  renderQuizQuestion();
+
+  // =========================================================================
+  // Bottom Dock Controls & Clinical Interventions
+  // =========================================================================
   els.sliderPeel.addEventListener('input', (e) => {
     const val = Number(e.target.value);
     els.labelPeel.textContent = `${val}%`;
@@ -141,6 +403,9 @@ export function createHudController(callbacks) {
     });
   }
 
+  els.btnDeployStent.addEventListener('click', () => callbacks.onToggleStent());
+  els.btnTriggerRupture.addEventListener('click', () => callbacks.onToggleRupture());
+
   // Pins Visibility Toggle
   let pinsVisible = true;
   els.btnTogglePins.addEventListener('click', () => {
@@ -163,9 +428,12 @@ export function createHudController(callbacks) {
   });
 
   // Close / Reset Focus Button on Detail Card
-  els.btnCloseDetail.addEventListener('click', () => {
-    callbacks.onResetFocus();
-  });
+  els.btnCloseDetail.addEventListener('click', () => callbacks.onResetFocus());
+
+  function syncPeelUI(val) {
+    els.sliderPeel.value = String(val);
+    els.labelPeel.textContent = `${val}%`;
+  }
 
   function syncStenosisUI(val) {
     els.sliderStenosis.value = String(val);
@@ -194,8 +462,78 @@ export function createHudController(callbacks) {
     }
   }
 
-  function buildClinicalContext(id, stenosisPct, heartRateMode) {
-    const hemo = computeHemodynamics(stenosisPct, heartRateMode, 0.7);
+  /**
+   * Synchronizes Deploy Stent / Reset Intervention and Plaque Rupture / Reset Thrombosis buttons & status pill.
+   */
+  function syncInterventionUI(stenosisPct, stentState, thrombusState) {
+    const stentActive = stentState.mode !== 'idle';
+    const thrombusActive = thrombusState.mode !== 'idle';
+
+    // Deploy Stent / Reset Intervention button
+    if (stentActive) {
+      els.btnDeployStent.disabled = false;
+      els.btnDeployStent.classList.add('active');
+      els.btnDeployStent.textContent = 'Reset Intervention';
+      els.btnDeployStent.title = 'Remove deployed stent and restore pre-stent stenosis';
+    } else {
+      const canStent = stenosisPct > 0 && !thrombusActive;
+      els.btnDeployStent.disabled = !canStent;
+      els.btnDeployStent.classList.remove('active');
+      els.btnDeployStent.textContent = 'Deploy Stent';
+      els.btnDeployStent.title = canStent
+        ? 'Animate PCI balloon angioplasty & titanium stent deployment'
+        : thrombusActive
+          ? 'Reset active thrombosis first'
+          : 'Increase Stenosis above 0% to deploy a stent';
+    }
+
+    // Trigger Plaque Rupture / Reset Thrombosis button (enabled when Stenosis >= 50% and Stent not deployed)
+    if (thrombusActive) {
+      els.btnTriggerRupture.disabled = false;
+      els.btnTriggerRupture.classList.add('active');
+      els.btnTriggerRupture.textContent = 'Reset Thrombosis';
+      els.btnTriggerRupture.title = 'Clear blood clot and restore flow';
+    } else {
+      const canRupture = stenosisPct >= 50 && !stentActive;
+      els.btnTriggerRupture.disabled = !canRupture;
+      els.btnTriggerRupture.classList.remove('active');
+      els.btnTriggerRupture.textContent = 'Trigger Plaque Rupture';
+      els.btnTriggerRupture.title = canRupture
+        ? 'Trigger fibrous cap fissure & occlusive blood clot formation'
+        : stentActive
+          ? 'Unavailable while metallic stent is deployed'
+          : 'Requires Stenosis ≥ 50% (Severe or Moderate plaque)';
+    }
+
+    // Also keep Step 7 tour shortcut buttons synced
+    if (els.btnTourStent && els.btnTourRupture) {
+      els.btnTourStent.textContent = stentActive ? 'Reset Stent' : 'Deploy PCI Stent';
+      els.btnTourStent.classList.toggle('active', stentActive);
+      els.btnTourRupture.textContent = thrombusActive ? 'Reset Clot' : 'Trigger Rupture';
+      els.btnTourRupture.classList.toggle('active', thrombusActive);
+    }
+
+    // Top-left live clinical status pill
+    if (thrombusActive) {
+      els.statusPill.className = 'clinical-status-pill glass-panel danger';
+      els.statusText.textContent = `Thrombosis: ${thrombusState.phaseLabel}`;
+    } else if (stentActive) {
+      const isDone = stentState.mode === 'deployed';
+      els.statusPill.className = `clinical-status-pill glass-panel ${isDone ? 'success' : ''}`;
+      els.statusText.textContent = `PCI: ${stentState.phaseLabel}`;
+    } else {
+      els.statusPill.className = 'clinical-status-pill glass-panel hidden';
+    }
+  }
+
+  function buildClinicalContext(id, stenosisPct, heartRateMode, stateOpts) {
+    const hemo = computeHemodynamics(stenosisPct, heartRateMode, 0.7, stateOpts);
+    if (hemo.isOccluded) {
+      return 'ACUTE THROMBOTIC OCCLUSION (100%): Fibrin-platelet clot completely seals the lumen. Downstream flow halted; proximal RBCs stagnate upstream.';
+    }
+    if (stateOpts && stateOpts.stentCompression > 0.75) {
+      return `POST-PCI STENT RESTORED: Brushed-titanium scaffold expands lumen to ${hemo.lumenDiameterPct}%, restoring smooth laminar flow (~${Math.round(hemo.peakVelocityCmS)} cm/s, ΔP ${hemo.peakDeltaPMmHg.toFixed(1)} mmHg).`;
+    }
     if (id === 'plaque') {
       if (stenosisPct === 0) {
         return 'Healthy vessel (0% narrowing): No intimal lipid deposition present. Adjust the Stenosis slider to inspect plaque progression.';
@@ -206,10 +544,10 @@ export function createHudController(callbacks) {
           : stenosisPct >= 45
             ? 'Moderate stenosis with elevated throat shear'
             : 'Mild sub-endothelial atheroma';
-      return `${grade}: ${stenosisPct}% diameter reduction (${hemo.areaReductionPct}% cross-sectional area loss), accelerating peak jet velocity to ~${Math.round(hemo.peakVelocityCmS)} cm/s.`;
+      return `${grade}: ${stenosisPct}% diameter reduction (${hemo.areaReductionPct}% area loss), peak jet ~${Math.round(hemo.peakVelocityCmS)} cm/s, ΔP ≈ ${hemo.peakDeltaPMmHg.toFixed(1)} mmHg.`;
     }
     if (id === 'lumen') {
-      return `${hemo.regime} regime (Re ≈ ${hemo.reynolds}) at ${hemo.bpm} BPM. Effective throat lumen is ${hemo.lumenDiameterPct}% with peak wall shear stress reaching ${hemo.wssPa.toFixed(1)} Pa.`;
+      return `${hemo.regime} regime (Re ≈ ${hemo.reynolds}) at ${hemo.bpm} BPM. Effective throat lumen is ${hemo.lumenDiameterPct}% with peak wall shear ${hemo.wssPa.toFixed(1)} Pa.`;
     }
     if (id === 'media') {
       return `Active rhythmic distension synced to ${hemo.bpm} BPM (${heartRateMode === 'exercise' ? 'elevated exercise pulse pressure' : 'resting baseline tone'}).`;
@@ -220,24 +558,29 @@ export function createHudController(callbacks) {
     return `Healthy structural integrity maintained at ${hemo.bpm} BPM; outer wall tension adapts smoothly to systolic pulsation.`;
   }
 
-  function updateDetailCard(id, stenosisPct, heartRateMode, expandDrawer = false) {
+  function updateDetailCard(id, stenosisPct, heartRateMode, stateOpts = {}, expandDrawer = false) {
     const item = ANATOMY_BY_ID[id] || ANATOMY_BY_ID.media;
+    const hemo = computeHemodynamics(stenosisPct, heartRateMode, 0.7, stateOpts);
 
     els.detailSwatch.style.background = item.swatch;
     els.detailTag.textContent = item.tag;
     els.detailName.textContent = item.name;
     els.detailThickness.textContent =
       id === 'plaque'
-        ? stenosisPct === 0
-          ? '0% (Absent)'
-          : `${stenosisPct}% Narrowing`
+        ? hemo.isOccluded
+          ? '100% Clot Seal'
+          : stateOpts.stentCompression > 0.75
+            ? 'Compressed (Stented)'
+            : stenosisPct === 0
+              ? '0% (Absent)'
+              : `${stenosisPct}% Narrowing`
         : id === 'lumen'
-          ? `${100 - stenosisPct}% Open Diam.`
+          ? `${hemo.lumenDiameterPct}% Open Diam.`
           : item.thicknessPct;
     els.detailTissueShort.textContent = item.primaryTissue;
     els.detailComposition.textContent = item.composition;
     els.detailFunction.textContent = item.function;
-    els.detailClinical.textContent = buildClinicalContext(id, stenosisPct, heartRateMode);
+    els.detailClinical.textContent = buildClinicalContext(id, stenosisPct, heartRateMode, stateOpts);
 
     for (const [key, btn] of legendButtons.entries()) {
       btn.classList.toggle('active', key === id);
@@ -246,9 +589,8 @@ export function createHudController(callbacks) {
       pin.classList.toggle('active', key === id);
     }
 
-    if (expandDrawer && els.rightDrawer.classList.contains('collapsed')) {
-      els.rightDrawer.classList.remove('collapsed');
-      els.btnCollapseRight.setAttribute('aria-expanded', 'true');
+    if (expandDrawer) {
+      setRightTab('anatomy', true);
     }
   }
 
@@ -267,7 +609,6 @@ export function createHudController(callbacks) {
     const h = els.pulseCanvas.height;
     pulseCtx.clearRect(0, 0, w, h);
 
-    // Subtle baseline grid
     pulseCtx.strokeStyle = 'rgba(148, 188, 240, 0.14)';
     pulseCtx.lineWidth = 1;
     pulseCtx.beginPath();
@@ -275,7 +616,6 @@ export function createHudController(callbacks) {
     pulseCtx.lineTo(w, h - 5);
     pulseCtx.stroke();
 
-    // Draw scrolling arterial pressure curve (2 cycles at exercise, 1.4 at resting)
     const cycles = heartRateMode === 'exercise' ? 2.1 : 1.35;
     const accent = heartRateMode === 'exercise' ? '#fb7185' : '#38bdf8';
 
@@ -294,21 +634,31 @@ export function createHudController(callbacks) {
     }
     pulseCtx.stroke();
 
-    // Glowing live lead point on right edge
     pulseCtx.fillStyle = '#ffffff';
     pulseCtx.beginPath();
     pulseCtx.arc(w - 2.5, lastY, 2.2, 0, Math.PI * 2);
     pulseCtx.fill();
   }
 
-  function updateTelemetry(time, stenosisPct, heartRateMode, heartPhase, pulseVal, selectedId) {
+  function updateTelemetry(
+    time,
+    stenosisPct,
+    heartRateMode,
+    heartPhase,
+    pulseVal,
+    selectedId,
+    stateOpts = {}
+  ) {
     drawPulseWaveform(heartPhase, heartRateMode, pulseVal);
 
-    // Throttle numeric DOM text updates to ~10 Hz for crisp readability & zero layout thrash
+    // Update live 2D Poiseuille & Bernoulli Graph when Physics tab is open
+    const profile = hemoGraph.update(time, stenosisPct, heartRateMode, pulseVal, stateOpts);
+
+    // Throttle numeric DOM text updates to ~10 Hz
     if (time - lastTelemetryUpdate < 0.1) return;
     lastTelemetryUpdate = time;
 
-    const hemo = computeHemodynamics(stenosisPct, heartRateMode, pulseVal);
+    const hemo = computeHemodynamics(stenosisPct, heartRateMode, pulseVal, stateOpts);
     els.valVelocity.textContent = String(Math.round(hemo.liveVelocityCmS));
     els.valLumen.textContent = String(hemo.lumenDiameterPct);
     els.valShear.textContent = hemo.wssPa.toFixed(1);
@@ -316,9 +666,41 @@ export function createHudController(callbacks) {
     els.valRegime.textContent = hemo.regime;
     els.valRegime.className = `regime-badge ${hemo.regimeClass}`;
 
-    // Keep clinical note live if plaque/lumen/intima is selected
+    // Update Physics Tab KPI cards
+    if (els.physPeakVel) {
+      const openFrac = Math.max(0.12, hemo.lumenDiameterPct / 100);
+      const resMult = hemo.isOccluded ? '∞' : `${Math.min(999, 1 / Math.pow(openFrac, 4)).toFixed(1)}×`;
+      const dpDisplay = profile ? profile.maxPressureDrop : hemo.peakDeltaPMmHg;
+
+      els.physPeakVel.textContent = hemo.isOccluded
+        ? '0 cm/s'
+        : `${Math.round(hemo.liveVelocityCmS)} cm/s`;
+      els.physDeltaP.textContent = `${dpDisplay.toFixed(1)} mmHg`;
+      els.physResistance.textContent = resMult;
+      els.physReynolds.textContent = String(hemo.reynolds);
+
+      if (hemo.isOccluded) {
+        els.physNote.textContent =
+          '100% thrombotic occlusion: volumetric flow drops to zero and the full arterial pressure head drops abruptly across the clot.';
+      } else if (stateOpts.stentCompression > 0.75) {
+        els.physNote.textContent =
+          'Titanium stent restores lumen radius r, slashing 4th-power Poiseuille resistance and eliminating the Venturi jet & ΔP spike.';
+      } else if (stenosisPct >= 50) {
+        els.physNote.textContent =
+          'Critical stenosis: steep Venturi acceleration at the throat triggers irreversible turbulent expansion pressure loss downstream.';
+      } else {
+        els.physNote.textContent =
+          'Smooth laminar Poiseuille profile: low pressure drop and minimal convective Bernoulli acceleration across the vessel.';
+      }
+    }
+
     if (selectedId) {
-      els.detailClinical.textContent = buildClinicalContext(selectedId, stenosisPct, heartRateMode);
+      els.detailClinical.textContent = buildClinicalContext(
+        selectedId,
+        stenosisPct,
+        heartRateMode,
+        stateOpts
+      );
     }
   }
 
@@ -337,7 +719,7 @@ export function createHudController(callbacks) {
     );
   }
 
-  function updatePins(camera, peelPct, stenosisPct, radialScale) {
+  function updatePins(camera, peelPct, effectiveStenosisPct, radialScale) {
     if (!pinsVisible) return;
 
     const vw = window.innerWidth;
@@ -354,7 +736,7 @@ export function createHudController(callbacks) {
 
     for (const item of ALL_ANATOMY_ITEMS) {
       const pinEl = pinElements.get(item.id);
-      const { anchor } = getAnatomyPinAnchor(item.id, peelPct, stenosisPct);
+      const { anchor } = getAnatomyPinAnchor(item.id, peelPct, effectiveStenosisPct);
       projVec.set(anchor[0], anchor[1] * radialScale, anchor[2] * radialScale);
       projVec.project(camera);
 
@@ -374,7 +756,7 @@ export function createHudController(callbacks) {
         continue;
       }
 
-      const dimmed = item.id === 'plaque' && stenosisPct < 3;
+      const dimmed = item.id === 'plaque' && effectiveStenosisPct < 3;
       pinEl.classList.toggle('dimmed', dimmed);
       pinEl.style.pointerEvents = 'auto';
       pinEl.style.opacity = dimmed ? '0.32' : '1';
@@ -382,7 +764,7 @@ export function createHudController(callbacks) {
       visibleItems.push({ el: pinEl, x: sx, y: sy, z: projVec.z });
     }
 
-    // Gentle screen-space vertical separation so pin pills never stack on top of each other
+    // Gentle screen-space vertical separation so pin pills never overlap
     visibleItems.sort((a, b) => a.y - b.y);
     const minDy = 26;
     const closeDx = 128;
@@ -416,10 +798,13 @@ export function createHudController(callbacks) {
   }
 
   return {
+    syncPeelUI,
     syncStenosisUI,
     syncModeUI,
     syncCameraUI,
     syncHeartRateUI,
+    syncInterventionUI,
+    setRightTab,
     updateDetailCard,
     updateTelemetry,
     updatePins,

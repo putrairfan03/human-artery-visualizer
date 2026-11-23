@@ -35,13 +35,22 @@
           <h1>Human Artery Visualizer</h1>
           <p class="subtitle">Multi-Layer Anatomy · Hemodynamics · Stenosis</p>
         </div>
-        <button id="btn-toggle-pins" class="icon-pill active" title="Toggle 3D Layer Pins" aria-pressed="true">
-          <svg viewBox="0 0 20 20" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8">
-            <path d="M10 17s5.5-4.7 5.5-9.2a5.5 5.5 0 1 0-11 0C4.5 12.3 10 17 10 17z"/>
-            <circle cx="10" cy="7.8" r="2"/>
-          </svg>
-          <span>Pins</span>
-        </button>
+        <div class="header-actions">
+          <button id="btn-toggle-tour" class="icon-pill" title="Open Guided Anatomical Tour & Quiz" aria-pressed="false">
+            <svg viewBox="0 0 20 20" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8">
+              <path d="M3 5.5A1.5 1.5 0 0 1 4.5 4H9a2 2 0 0 1 2 2v10a1.5 1.5 0 0 0-1.5-1.5h-5A1.5 1.5 0 0 1 3 13V5.5z"/>
+              <path d="M17 5.5A1.5 1.5 0 0 0 15.5 4H11a2 2 0 0 0-2 2v10a1.5 1.5 0 0 1 1.5-1.5h5A1.5 1.5 0 0 0 17 13V5.5z"/>
+            </svg>
+            <span>Tour &amp; Quiz</span>
+          </button>
+          <button id="btn-toggle-pins" class="icon-pill active" title="Toggle 3D Layer Pins" aria-pressed="true">
+            <svg viewBox="0 0 20 20" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8">
+              <path d="M10 17s5.5-4.7 5.5-9.2a5.5 5.5 0 1 0-11 0C4.5 12.3 10 17 10 17z"/>
+              <circle cx="10" cy="7.8" r="2"/>
+            </svg>
+            <span>Pins</span>
+          </button>
+        </div>
       </div>
 
       <div class="telemetry-bar">
@@ -84,6 +93,12 @@
       </div>
     </header>
 
+    <!-- Clinical Status Pill (Visible during PCI Stent or Plaque Rupture/Thrombosis) -->
+    <div id="clinical-status-pill" class="clinical-status-pill glass-panel hidden" role="status" aria-live="polite">
+      <span id="clinical-status-dot" class="status-dot"></span>
+      <span id="clinical-status-text">Standby</span>
+    </div>
+
     <!-- Heatmap Scale Legend (visible in Velocity & Shear Heatmap mode) -->
     <aside id="heatmap-legend" class="heatmap-legend glass-panel hidden" aria-label="Velocity and Shear Color Scale">
       <span class="legend-title">Flow Velocity &amp; Wall Shear Scale</span>
@@ -96,59 +111,180 @@
     </aside>
   </div>
 
-  <!-- Right Collapsible Layer Legend & Anatomical Detail Drawer -->
+  <!-- Right Collapsible Panel: Anatomy | Poiseuille/Bernoulli Physics | Guided Tour & Quiz -->
   <aside id="right-drawer" class="hud-right glass-panel">
-    <button id="btn-collapse-right" class="drawer-tab" title="Collapse or expand Anatomy Legend" aria-expanded="true">
+    <button id="btn-collapse-right" class="drawer-tab" title="Collapse or expand Inspector Panel" aria-expanded="true">
       <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2">
         <path d="M6 3l5 5-5 5"/>
       </svg>
     </button>
 
+    <div class="drawer-tabs" role="tablist" aria-label="Inspector Modules">
+      <button class="drawer-tab-btn active" data-tab="anatomy" role="tab" aria-selected="true">Anatomy</button>
+      <button class="drawer-tab-btn" data-tab="physics" role="tab" aria-selected="false">Physics</button>
+      <button class="drawer-tab-btn" data-tab="education" role="tab" aria-selected="false">Tour &amp; Quiz</button>
+    </div>
+
     <div class="drawer-inner">
-      <div class="drawer-header">
-        <span class="section-kicker">Anatomical Layers</span>
-        <span class="hint-text">Click to focus</span>
-      </div>
+      <!-- TAB 1: Anatomical Layers & Detail Card -->
+      <div id="tab-anatomy" class="tab-panel active" role="tabpanel">
+        <div class="drawer-header">
+          <span class="section-kicker">Anatomical Layers</span>
+          <span class="hint-text">Click to focus</span>
+        </div>
 
-      <ul id="layer-legend-list" class="layer-list" role="list"></ul>
+        <ul id="layer-legend-list" class="layer-list" role="list"></ul>
 
-      <!-- Anatomical Detail Card (Updates when pin or layer is clicked) -->
-      <div id="detail-card" class="detail-card">
-        <div class="detail-header">
-          <div class="detail-title-wrap">
-            <span id="detail-swatch" class="detail-swatch"></span>
-            <div>
-              <span id="detail-tag" class="detail-tag">Layer 3</span>
-              <h2 id="detail-name">Tunica Media</h2>
+        <!-- Anatomical Detail Card (Updates when pin or layer is clicked) -->
+        <div id="detail-card" class="detail-card">
+          <div class="detail-header">
+            <div class="detail-title-wrap">
+              <span id="detail-swatch" class="detail-swatch"></span>
+              <div>
+                <span id="detail-tag" class="detail-tag">Layer 3</span>
+                <h2 id="detail-name">Tunica Media</h2>
+              </div>
+            </div>
+            <button id="btn-close-detail" class="close-btn" title="Reset focus">×</button>
+          </div>
+
+          <div class="detail-stats">
+            <div class="stat-pill">
+              <span class="stat-label">Thickness / Share</span>
+              <strong id="detail-thickness">~48% of wall</strong>
+            </div>
+            <div class="stat-pill">
+              <span class="stat-label">Primary Tissue</span>
+              <strong id="detail-tissue-short">Smooth Muscle</strong>
             </div>
           </div>
-          <button id="btn-close-detail" class="close-btn" title="Reset focus">×</button>
+
+          <div class="detail-section">
+            <h3>Tissue Composition</h3>
+            <p id="detail-composition"></p>
+          </div>
+
+          <div class="detail-section">
+            <h3>Physiological Function</h3>
+            <p id="detail-function"></p>
+          </div>
+
+          <div id="detail-clinical-wrap" class="detail-clinical">
+            <span class="clinical-label">Hemodynamic State</span>
+            <p id="detail-clinical"></p>
+          </div>
+        </div>
+      </div>
+
+      <!-- TAB 2: Live Poiseuille & Bernoulli Mathematical Telemetry -->
+      <div id="tab-physics" class="tab-panel" role="tabpanel">
+        <div class="drawer-header">
+          <span class="section-kicker">Poiseuille &amp; Bernoulli Telemetry</span>
+          <span class="hint-text">Live Axial Profile</span>
         </div>
 
-        <div class="detail-stats">
+        <div class="graph-card">
+          <div class="graph-legend-row">
+            <span class="legend-chip cyan"><i></i>Velocity v(x)</span>
+            <span class="legend-chip rose"><i></i>Pressure Drop ΔP(x)</span>
+          </div>
+          <canvas id="hemo-graph-canvas" class="hemo-graph-canvas" aria-label="Live Axial Velocity and Pressure Drop Graph"></canvas>
+        </div>
+
+        <div class="physics-kpis">
           <div class="stat-pill">
-            <span class="stat-label">Thickness / Share</span>
-            <strong id="detail-thickness">~45% of wall</strong>
+            <span class="stat-label">Peak Velocity</span>
+            <strong id="phys-peak-vel" class="mono-accent-cyan">68 cm/s</strong>
           </div>
           <div class="stat-pill">
-            <span class="stat-label">Primary Tissue</span>
-            <strong id="detail-tissue-short">Smooth Muscle</strong>
+            <span class="stat-label">Pressure Drop ΔP</span>
+            <strong id="phys-delta-p" class="mono-accent-rose">2.4 mmHg</strong>
+          </div>
+          <div class="stat-pill">
+            <span class="stat-label">Resistance (r₀/r)⁴</span>
+            <strong id="phys-resistance" class="mono-accent-amber">4.2×</strong>
+          </div>
+          <div class="stat-pill">
+            <span class="stat-label">Reynolds (Re)</span>
+            <strong id="phys-reynolds">1120</strong>
           </div>
         </div>
 
-        <div class="detail-section">
-          <h3>Tissue Composition</h3>
-          <p id="detail-composition"></p>
+        <div class="formula-box">
+          <div class="formula-row">
+            <span class="formula-name">Continuity</span>
+            <code>A₁v₁ = A₂v₂</code>
+          </div>
+          <div class="formula-row">
+            <span class="formula-name">Bernoulli</span>
+            <code>ΔP = ½ρ(v₂² − v₁²)</code>
+          </div>
+          <div class="formula-row">
+            <span class="formula-name">Poiseuille</span>
+            <code>R = 8μL / (πr⁴)</code>
+          </div>
+          <p id="phys-note" class="formula-note">
+            Narrowing the radius drives a 4th-power resistance surge and Venturi velocity spike at the throat.
+          </p>
+        </div>
+      </div>
+
+      <!-- TAB 3: Educational Mode — Guided Tour & 5-Question Quiz -->
+      <div id="tab-education" class="tab-panel" role="tabpanel">
+        <div class="edu-subtabs" role="tablist">
+          <button id="btn-subtab-tour" class="subtab-btn active" data-subtab="tour">Guided Tour</button>
+          <button id="btn-subtab-quiz" class="subtab-btn" data-subtab="quiz">Start Quick Quiz</button>
         </div>
 
-        <div class="detail-section">
-          <h3>Physiological Function</h3>
-          <p id="detail-function"></p>
+        <!-- Guided Anatomical Tour Panel -->
+        <div id="subtab-tour" class="edu-panel active">
+          <div class="tour-progress-head">
+            <span id="tour-step-counter" class="detail-tag">Step 1 of 7</span>
+            <div id="tour-dots" class="tour-dots" aria-hidden="true"></div>
+          </div>
+
+          <div class="tour-card">
+            <span id="tour-step-badge" class="tour-badge">Layer 1 · Outermost</span>
+            <h2 id="tour-step-title">Tunica Adventitia &amp; Vasa Vasorum</h2>
+            <p id="tour-step-summary" class="tour-summary"></p>
+
+            <div id="tour-step-actions" class="tour-step-actions hidden">
+              <button id="btn-tour-stent" class="action-btn stent-btn">Deploy PCI Stent</button>
+              <button id="btn-tour-rupture" class="action-btn rupture-btn">Trigger Rupture</button>
+            </div>
+          </div>
+
+          <div class="tour-nav">
+            <button id="btn-tour-prev" class="nav-btn">← Previous</button>
+            <button id="btn-tour-next" class="nav-btn primary">Next →</button>
+          </div>
         </div>
 
-        <div id="detail-clinical-wrap" class="detail-clinical">
-          <span class="clinical-label">Hemodynamic State</span>
-          <p id="detail-clinical"></p>
+        <!-- Interactive 5-Question Self-Check Quiz Panel -->
+        <div id="subtab-quiz" class="edu-panel">
+          <div class="quiz-header">
+            <span id="quiz-progress" class="detail-tag">Question 1 of 5</span>
+            <span id="quiz-score" class="quiz-score-pill">Score: 0 / 5</span>
+          </div>
+
+          <div id="quiz-body" class="quiz-card">
+            <h3 id="quiz-question" class="quiz-question"></h3>
+            <div id="quiz-options" class="quiz-options"></div>
+            <div id="quiz-feedback" class="quiz-feedback hidden"></div>
+          </div>
+
+          <div id="quiz-summary" class="quiz-summary hidden">
+            <div class="summary-score-ring">
+              <strong id="quiz-final-score">5 / 5</strong>
+              <span>Completed</span>
+            </div>
+            <p id="quiz-final-msg"></p>
+            <button id="btn-quiz-retake" class="nav-btn primary full-width">Retake Quiz</button>
+          </div>
+
+          <div id="quiz-footer" class="quiz-footer">
+            <button id="btn-quiz-next" class="nav-btn primary full-width" disabled>Next Question →</button>
+          </div>
         </div>
       </div>
     </div>
@@ -203,7 +339,22 @@
 
       <div class="bar-divider"></div>
 
-      <!-- Column 3: Quick Camera Buttons -->
+      <!-- Column 3: Clinical Interventions (PCI Stent & Plaque Rupture / Thrombosis) -->
+      <div class="control-group intervention-group">
+        <span class="group-label">Clinical Intervention</span>
+        <div class="intervention-pills">
+          <button id="btn-deploy-stent" class="action-btn stent-btn" title="Animate PCI balloon angioplasty and titanium stent deployment">
+            Deploy Stent
+          </button>
+          <button id="btn-trigger-rupture" class="action-btn rupture-btn" disabled title="Requires Stenosis ≥ 50% (without deployed stent)">
+            Trigger Plaque Rupture
+          </button>
+        </div>
+      </div>
+
+      <div class="bar-divider"></div>
+
+      <!-- Column 4: Quick Camera Buttons -->
       <div class="control-group cameras-group">
         <span class="group-label">Camera Views</span>
         <div class="camera-pills" role="group" aria-label="Quick Camera Presets">
